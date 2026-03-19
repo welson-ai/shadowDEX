@@ -1,4 +1,14 @@
 import {
+  getTeeAuthToken,
+  settleMatchInRollup,
+  commitAndUndelegate,
+  getBaseProvider,
+  loadWallet,
+  baseConnection,
+  rollupConnection,
+  PROGRAM_ID,
+} from "./shadowdex-client";
+import {
   Connection,
   Keypair,
   PublicKey,
@@ -17,31 +27,6 @@ const IDL = JSON.parse(
     "utf-8"
   )
 );
-
-// ── Connections ───────────────────────────────────────────────────────────────
-const baseConnection   = new Connection(process.env.SOLANA_RPC!,    "confirmed");
-const rollupConnection = new Connection(process.env.MAGICBLOCK_RPC!, "confirmed");
-
-// ── Wallet ────────────────────────────────────────────────────────────────────
-function loadWallet(): Keypair {
-  const raw = fs.readFileSync(
-    process.env.ANCHOR_WALLET!.replace("~", process.env.HOME!),
-    "utf-8"
-  );
-  return Keypair.fromSecretKey(Buffer.from(JSON.parse(raw)));
-}
-
-function makeProvider(connection: Connection, wallet: Keypair): AnchorProvider {
-  return new AnchorProvider(
-    connection,
-    {
-      publicKey: wallet.publicKey,
-      signTransaction: async (tx) => { tx.sign(wallet); return tx; },
-      signAllTransactions: async (txs) => { txs.forEach(t => t.sign(wallet)); return txs; },
-    },
-    { commitment: "confirmed" }
-  );
-}
 
 // ── Order types ───────────────────────────────────────────────────────────────
 interface LiveOrder {
@@ -189,22 +174,56 @@ function printBook(): void {
 
 // ── Main loop ─────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
-  const wallet   = loadWallet();
-  const provider = makeProvider(baseConnection, wallet);
-  const program  = new Program(IDL as any, provider);
-
+  const wallet = loadWallet();
   console.log("ShadowDEX matching engine started");
   console.log("Matcher:", wallet.publicKey.toBase58());
 
-  // Poll every 2 seconds
+  // Get TEE auth token once at startup
+  let authToken: string;
+  try {
+    authToken = await getTeeAuthToken(wallet);
+    console.log("TEE auth established ✓");
+  } catch (e: any) {
+    console.warn("TEE auth failed, falling back to devnet:", e.message);
+  }
+
+  // Read from base for the order book, settle inside rollup
+  const provider = getBaseProvider(wallet);
+  const program  = new Program(IDL as any, provider);
+
   while (true) {
     try {
       await syncOrderBook(program);
       const matches = findMatches();
 
       if (matches.length > 0) {
-        console.log(`Found ${matches.length} match(es) — settling...`);
-        await settleMatches(program, wallet, matches);
+        console.log(`Found ${matches.length} match(es)`);
+        for (const { buy, sell, fillPrice, fillSize } of matches) {
+          // Settle inside the TEE rollup — invisible until committed
+          const sig = await settleMatchInRollup(
+            wallet,
+            buy.publicKey,
+            sell.publicKey,
+            buy.orderId,
+            sell.orderId,
+            fillPrice,
+            fillSize
+          );
+
+          // Commit both accounts back to base Solana with proof
+          await commitAndUndelegate(wallet, buy.publicKey);
+          await commitAndUndelegate(wallet, sell.publicKey);
+
+          trades.push({
+            buyOrderId:  buy.orderId,
+            sellOrderId: sell.orderId,
+            fillPrice,
+            fillSize,
+            buyer:  buy.owner.toBase58(),
+            seller: sell.owner.toBase58(),
+            ts:     Date.now(),
+          });
+        }
       }
 
       printBook();

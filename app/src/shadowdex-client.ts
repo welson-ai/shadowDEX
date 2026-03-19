@@ -4,12 +4,15 @@ import {
   PublicKey,
   SystemProgram,
   Transaction,
+  sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { AnchorProvider, Program, BN, web3 } from "@coral-xyz/anchor";
+import { AnchorProvider, Program, BN } from "@coral-xyz/anchor";
 import {
-  EphemeralRollup,
-  delegateAccount,
-  undelegateAccount,
+  createDelegateInstruction,
+  createCommitAndUndelegateInstruction,
+  getAuthToken,
+  ConnectionMagicRouter,
+  DELEGATION_PROGRAM_ID,
 } from "@magicblock-labs/ephemeral-rollups-sdk";
 import * as fs from "fs";
 import * as path from "path";
@@ -17,7 +20,7 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-// ── IDL (paste full IDL from target/idl/shadowdex.json after build) ───────────
+// ── IDL ───────────────────────────────────────────────────────────────────────
 const IDL = JSON.parse(
   fs.readFileSync(
     path.resolve(__dirname, "../../shadowdex/target/idl/shadowdex.json"),
@@ -25,16 +28,11 @@ const IDL = JSON.parse(
   )
 );
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-export const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID!);
-export const SOLANA_RPC  = process.env.SOLANA_RPC!;
-export const MB_RPC      = process.env.MAGICBLOCK_RPC!;
-
 // ── Connections ───────────────────────────────────────────────────────────────
-export const baseConnection      = new Connection(SOLANA_RPC, "confirmed");
-export const rollupConnection    = new Connection(MB_RPC,     "confirmed");
+export const baseConnection   = new Connection(process.env.SOLANA_RPC!,   "confirmed");
+export const rollupConnection = new Connection(process.env.TEE_RPC!,      "confirmed");
 
-// ── Wallet (matcher keypair — this becomes the TEE session authority) ─────────
+// ── Wallet ────────────────────────────────────────────────────────────────────
 export function loadWallet(): Keypair {
   const raw = fs.readFileSync(
     process.env.ANCHOR_WALLET!.replace("~", process.env.HOME!),
@@ -44,23 +42,24 @@ export function loadWallet(): Keypair {
 }
 
 // ── Providers ─────────────────────────────────────────────────────────────────
-export function getBaseProvider(wallet: Keypair): AnchorProvider {
+function makeProvider(connection: Connection, wallet: Keypair): AnchorProvider {
   return new AnchorProvider(
-    baseConnection,
-    { publicKey: wallet.publicKey, signTransaction: async (tx) => { tx.sign(wallet); return tx; }, signAllTransactions: async (txs) => { txs.forEach(t => t.sign(wallet)); return txs; } },
+    connection,
+    {
+      publicKey: wallet.publicKey,
+      signTransaction:    async (tx) => { tx.sign(wallet); return tx; },
+      signAllTransactions: async (txs) => { txs.forEach(t => t.sign(wallet)); return txs; },
+    },
     { commitment: "confirmed" }
   );
 }
 
-export function getRollupProvider(wallet: Keypair): AnchorProvider {
-  return new AnchorProvider(
-    rollupConnection,
-    { publicKey: wallet.publicKey, signTransaction: async (tx) => { tx.sign(wallet); return tx; }, signAllTransactions: async (txs) => { txs.forEach(t => t.sign(wallet)); return txs; } },
-    { commitment: "confirmed" }
-  );
-}
+export function getBaseProvider(wallet: Keypair)   { return makeProvider(baseConnection,   wallet); }
+export function getRollupProvider(wallet: Keypair) { return makeProvider(rollupConnection, wallet); }
 
-// ── PDA helpers ───────────────────────────────────────────────────────────────
+export const PROGRAM_ID = new PublicKey(process.env.PROGRAM_ID!);
+
+// ── PDA ───────────────────────────────────────────────────────────────────────
 export function orderPDA(owner: PublicKey, orderId: number): PublicKey {
   const [pda] = PublicKey.findProgramAddressSync(
     [
@@ -73,74 +72,66 @@ export function orderPDA(owner: PublicKey, orderId: number): PublicKey {
   return pda;
 }
 
-// ── Delegate an order account into the private ephemeral rollup ───────────────
-export async function delegateOrderToRollup(
-  wallet: Keypair,
-  orderAccount: PublicKey
-): Promise<string> {
-  console.log(`Delegating order account ${orderAccount.toBase58()} to rollup...`);
-
-  const tx = await delegateAccount({
-    payer:      wallet.publicKey,
-    account:    orderAccount,
-    ownerProgram: PROGRAM_ID,
-    connection: baseConnection,
-  });
-
-  const sig = await baseConnection.sendTransaction(tx, [wallet]);
-  await baseConnection.confirmTransaction(sig, "confirmed");
-  console.log(`Delegated ✓  sig: ${sig}`);
-  return sig;
-}
-
-// ── Undelegate (settle back to base layer) ────────────────────────────────────
-export async function undelegateOrderFromRollup(
-  wallet: Keypair,
-  orderAccount: PublicKey
-): Promise<string> {
-  console.log(`Undelegating ${orderAccount.toBase58()} back to Solana...`);
-
-  const tx = await undelegateAccount({
-    payer:      wallet.publicKey,
-    account:    orderAccount,
-    ownerProgram: PROGRAM_ID,
-    connection: rollupConnection,
-  });
-
-  const sig = await rollupConnection.sendTransaction(tx, [wallet]);
-  await rollupConnection.confirmTransaction(sig, "confirmed");
-  console.log(`Undelegated ✓  sig: ${sig}`);
-  return sig;
-}
-
-// ── Submit order (to rollup, invisible on public mempool) ─────────────────────
-export async function submitOrder(
+// ── Step 1: Submit order on base Solana ───────────────────────────────────────
+export async function submitOrderBase(
   wallet: Keypair,
   orderId: number,
-  side: { buy?: {} } | { sell?: {} },
+  side: "buy" | "sell",
   price: number,
   size: number
-): Promise<{ orderAccount: PublicKey; sig: string }> {
-  const provider = getRollupProvider(wallet);
-  const program = new Program(IDL as any, provider);
-  const orderAccount = orderPDA(wallet.publicKey, orderId);
+): Promise<PublicKey> {
+  const provider = getBaseProvider(wallet);
+  const program  = new Program(IDL as any, provider);
+  const account  = orderPDA(wallet.publicKey, orderId);
 
-  const sig = await program.methods
-    .submitOrder(new BN(orderId), side, new BN(price), new BN(size))
+  await program.methods
+    .submitOrder(
+      new BN(orderId),
+      side === "buy" ? { buy: {} } : { sell: {} },
+      new BN(price),
+      new BN(size)
+    )
     .accounts({
-      order:         orderAccount,
+      order:         account,
       user:          wallet.publicKey,
       systemProgram: SystemProgram.programId,
     })
     .signers([wallet])
     .rpc();
 
-  console.log(`Order ${orderId} submitted to rollup ✓  sig: ${sig}`);
-  return { orderAccount, sig };
+  console.log(`[base] Order #${orderId} created — PDA: ${account.toBase58()}`);
+  return account;
 }
 
-// ── Settle a matched pair (called by matching engine) ─────────────────────────
-export async function settleMatch(
+// ── Step 2: Delegate order account into TEE rollup ────────────────────────────
+export async function delegateOrder(
+  wallet: Keypair,
+  orderAccount: PublicKey
+): Promise<void> {
+  console.log(`[delegate] Delegating ${orderAccount.toBase58()} into TEE rollup...`);
+
+  const ix = createDelegateInstruction({
+    account:            orderAccount,
+    ownerProgram:       PROGRAM_ID,
+    payer:              wallet.publicKey,
+    delegationProgram:  DELEGATION_PROGRAM_ID,
+  });
+
+  const tx = new Transaction().add(ix);
+  const sig = await sendAndConfirmTransaction(baseConnection, tx, [wallet]);
+  console.log(`[delegate] Delegated ✓  sig: ${sig}`);
+}
+
+// ── Step 3: Get TEE auth token (proves execution inside TEE) ──────────────────
+export async function getTeeAuthToken(wallet: Keypair): Promise<string> {
+  console.log("[tee] Requesting auth token...");
+  const token = await getAuthToken(rollupConnection, wallet);
+  console.log("[tee] Auth token obtained ✓");
+  return token;
+}
+
+// ── Step 4: Settle match inside the rollup ────────────────────────────────────
+export async function settleMatchInRollup(
   matcher: Keypair,
   buyOrderAccount: PublicKey,
   sellOrderAccount: PublicKey,
@@ -150,7 +141,7 @@ export async function settleMatch(
   fillSize: number
 ): Promise<string> {
   const provider = getRollupProvider(matcher);
-  const program = new Program(IDL as any, provider);
+  const program  = new Program(IDL as any, provider);
 
   const sig = await program.methods
     .settleMatch(
@@ -167,6 +158,26 @@ export async function settleMatch(
     .signers([matcher])
     .rpc();
 
-  console.log(`Match settled ✓  buy#${buyOrderId} x sell#${sellOrderId}  @ ${fillPrice}  sig: ${sig}`);
+  console.log(`[rollup] Match settled ✓  sig: ${sig}`);
   return sig;
+}
+
+// ── Step 5: Commit + undelegate back to base Solana ───────────────────────────
+export async function commitAndUndelegate(
+  wallet: Keypair,
+  orderAccount: PublicKey
+): Promise<void> {
+  console.log(`[commit] Committing ${orderAccount.toBase58()} back to Solana...`);
+
+  const ix = createCommitAndUndelegateInstruction({
+    account:           orderAccount,
+    ownerProgram:      PROGRAM_ID,
+    payer:             wallet.publicKey,
+    delegationProgram: DELEGATION_PROGRAM_ID,
+  });
+
+  const tx  = new Transaction().add(ix);
+  // Commit is sent to the rollup, which then finalizes on base
+  const sig = await sendAndConfirmTransaction(rollupConnection, tx, [wallet]);
+  console.log(`[commit] Committed to base Solana ✓  sig: ${sig}`);
 }
