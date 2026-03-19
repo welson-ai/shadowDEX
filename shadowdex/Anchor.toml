@@ -5,10 +5,10 @@ package_manager = "yarn"
 resolution = true
 skip-lint = false
 
-[programs.localnet]
+[programs.devnet]
 shadowdex = "HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq"
 
-[programs.devnet]
+[programs.localnet]
 shadowdex = "HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq"
 
 [registry]
