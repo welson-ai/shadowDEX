@@ -8,6 +8,9 @@ skip-lint = false
 [programs.localnet]
 shadowdex = "HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq"
 
+[programs.devnet]
+shadowdex = "HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq"
+
 [registry]
 url = "https://api.apr.dev"
 

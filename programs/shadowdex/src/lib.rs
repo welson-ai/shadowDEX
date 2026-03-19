@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 
-declare_id!("SHADo1111111111111111111111111111111111111111");
+declare_id!("HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq");
 
 #[program]
 pub mod shadowdex {
