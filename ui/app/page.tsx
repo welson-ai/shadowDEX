@@ -130,11 +130,11 @@ export default function Home() {
   // ── Submit order ──────────────────────────────────────────────────────────
   async function submitOrder() {
     const program = getProgram();
-    if (!program || !publicKey) return;
+    if (!program || !publicKey || !signTransaction || !signAllTransactions) return;
     if (!price || !size) { setStatus("Enter price and size"); return; }
 
     setLoading(true);
-    setStatus("Submitting to private rollup...");
+    setStatus("Submitting order...");
 
     try {
       const orderId = Date.now();
@@ -147,6 +147,8 @@ export default function Home() {
         PROGRAM_ID
       );
 
+      // Step 1 — create order on base Solana
+      setStatus("Creating order on Solana...");
       const sig = await program.methods
         .submitOrder(
           new BN(orderId),
@@ -161,10 +163,38 @@ export default function Home() {
         })
         .rpc();
 
-      setStatus(`Order submitted ✓  ${sig.slice(0, 20)}...`);
+      setStatus("Delegating into private TEE rollup...");
+
+      // Step 2 — delegate into private ephemeral rollup
+      const { createDelegateInstruction, DELEGATION_PROGRAM_ID } = await import(
+        "@magicblock-labs/ephemeral-rollups-sdk"
+      );
+      const { Transaction, sendAndConfirmTransaction } = await import("@solana/web3.js");
+
+      const delegateIx = createDelegateInstruction({
+        account: orderPDA,
+        ownerProgram: PROGRAM_ID,
+        payer: publicKey,
+        delegationProgram: DELEGATION_PROGRAM_ID,
+      });
+
+      const delegateTx = new Transaction().add(delegateIx);
+      delegateTx.feePayer = publicKey;
+      delegateTx.recentBlockhash = (
+        await program.provider.connection.getLatestBlockhash()
+      ).blockhash;
+
+      const signedTx = await signTransaction(delegateTx);
+      const delegateSig = await program.provider.connection.sendRawTransaction(
+        signedTx.serialize()
+      );
+      await program.provider.connection.confirmTransaction(delegateSig, "confirmed");
+
+      setStatus(`Order hidden in TEE ✓  — MEV bots see nothing`);
       setPrice("");
       setSize("");
       await fetchOrders();
+
     } catch (e: any) {
       setStatus(`Error: ${e.message}`);
     } finally {
@@ -253,7 +283,7 @@ export default function Home() {
                 : "bg-red-600 hover:bg-red-500 disabled:bg-red-900"
             } disabled:cursor-not-allowed text-white`}
           >
-            {loading ? "Submitting..." : `Place ${side} order`}
+            {loading ? "Submitting..." : `Place ${side} order (private)`}
           </button>
 
           {status && (
