@@ -27,38 +27,17 @@ const IDL = {
       ],
     },
   ],
-  accounts: [
-    {
-      name: "Order",
-      discriminator: [134, 173, 232, 200, 169, 188, 237, 4],
-    },
-  ],
+  accounts: [{ name: "Order", discriminator: [134, 173, 232, 200, 169, 188, 237, 4] }],
   types: [
-    {
-      name: "OrderSide",
-      type: { kind: "enum", variants: [{ name: "Buy" }, { name: "Sell" }] },
-    },
-    {
-      name: "OrderStatus",
-      type: { kind: "enum", variants: [{ name: "Open" }, { name: "Filled" }, { name: "Cancelled" }] },
-    },
-    {
-      name: "Order",
-      type: {
-        kind: "struct",
-        fields: [
-          { name: "owner", type: "pubkey" },
-          { name: "order_id", type: "u64" },
-          { name: "side", type: { defined: { name: "OrderSide" } } },
-          { name: "price", type: "u64" },
-          { name: "size", type: "u64" },
-          { name: "filled", type: "u64" },
-          { name: "status", type: { defined: { name: "OrderStatus" } } },
-          { name: "timestamp", type: "i64" },
-          { name: "bump", type: "u8" },
-        ],
-      },
-    },
+    { name: "OrderSide", type: { kind: "enum", variants: [{ name: "Buy" }, { name: "Sell" }] } },
+    { name: "OrderStatus", type: { kind: "enum", variants: [{ name: "Open" }, { name: "Filled" }, { name: "Cancelled" }] } },
+    { name: "Order", type: { kind: "struct", fields: [
+      { name: "owner", type: "pubkey" }, { name: "order_id", type: "u64" },
+      { name: "side", type: { defined: { name: "OrderSide" } } }, { name: "price", type: "u64" },
+      { name: "size", type: "u64" }, { name: "filled", type: "u64" },
+      { name: "status", type: { defined: { name: "OrderStatus" } } },
+      { name: "timestamp", type: "i64" }, { name: "bump", type: "u8" },
+    ]}},
   ],
 };
 
@@ -437,18 +416,14 @@ export default function Home() {
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700,
                     color: o.side === "buy" ? "var(--green)" : "var(--red)", letterSpacing: "0.1em" }}>
-            : filled.slice(0, 10).map(o => (
-              <div key={o.publicKey} className="text-xs py-1.5 border-b border-gray-800">
-                <div className="flex justify-between">
-                  <span className={o.side === "buy" ? "text-emerald-400" : "text-red-400"}>
                     {o.side.toUpperCase()}
                   </span>
-                  <span className="text-gray-300">
-                    {(o.price / 1_000_000).toFixed(4)} USDC
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text)" }}>
+                    {(o.price / 1_000_000).toFixed(4)}
                   </span>
                 </div>
-                <div className="text-gray-600 mt-0.5">
-                  {o.owner.slice(0, 8)}...{o.owner.slice(-4)}
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted)" }}>
+                  {o.owner.slice(0,6)}...{o.owner.slice(-4)}
                 </div>
               </div>
             ))

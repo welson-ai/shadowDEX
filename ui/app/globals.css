@@ -1,7 +1,6 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
 @import "@solana/wallet-adapter-react-ui/styles.css";
 @import "tailwindcss";
-
-@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
 
 :root {
   --bg:        #080b0f;
