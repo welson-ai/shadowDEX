@@ -14,6 +14,7 @@ import {
   ConnectionMagicRouter,
   DELEGATION_PROGRAM_ID,
 } from "@magicblock-labs/ephemeral-rollups-sdk";
+import nacl from "tweetnacl";
 import * as fs from "fs";
 import * as path from "path";
 import * as dotenv from "dotenv";
@@ -122,12 +123,25 @@ export async function delegateOrder(
   console.log(`[delegate] Delegated ✓  sig: ${sig}`);
 }
 
-// ── Step 3: Get TEE auth token (proves execution inside TEE) ──────────────────
-export async function getTeeAuthToken(wallet: Keypair): Promise<string> {
-  console.log("[tee] Requesting auth token...");
-  const token = await getAuthToken(rollupConnection, wallet);
+// ── TEE Auth ──────────────────────────────────────────────────────────────────
+export async function getTeeAuthToken(): Promise<{ token: string; expiresAt: number }> {
+  const wallet = loadWallet();
+  const signMessage = async (msg: Uint8Array) => nacl.sign.detached(msg, wallet.secretKey);
+  const authToken = await getAuthToken(
+    process.env.TEE_RPC!,
+    wallet.publicKey,
+    signMessage
+  );
   console.log("[tee] Auth token obtained ✓");
-  return token;
+  return authToken;
+}
+
+// ── TEE-authenticated connection ──────────────────────────────────────────────
+export function getTeeConnection(token: string): Connection {
+  return new Connection(process.env.TEE_RPC!, {
+    commitment: "confirmed",
+    httpHeaders: { Authorization: `Bearer ${token}` },
+  });
 }
 
 // ── Step 4: Settle match inside the rollup ────────────────────────────────────
@@ -180,4 +194,22 @@ export async function commitAndUndelegate(
   // Commit is sent to the rollup, which then finalizes on base
   const sig = await sendAndConfirmTransaction(rollupConnection, tx, [wallet]);
   console.log(`[commit] Committed to base Solana ✓  sig: ${sig}`);
+}
+
+// ── Complete private order flow ───────────────────────────────────────────────
+export async function submitAndDelegate(
+  wallet: Keypair,
+  orderId: number,
+  side: "buy" | "sell",
+  price: number,
+  size: number
+): Promise<PublicKey> {
+  // 1. Create order on base Solana
+  const account = await submitOrderBase(wallet, orderId, side, price, size);
+
+  // 2. Immediately delegate into private TEE rollup
+  await delegateOrder(wallet, account);
+
+  console.log(`[private] Order #${orderId} is now hidden inside TEE ✓`);
+  return account;
 }

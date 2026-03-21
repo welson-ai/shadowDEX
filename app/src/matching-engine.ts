@@ -1,8 +1,7 @@
 import {
   getTeeAuthToken,
-  settleMatchInRollup,
+  getTeeConnection,
   commitAndUndelegate,
-  getBaseProvider,
   loadWallet,
   baseConnection,
   rollupConnection,
@@ -27,6 +26,19 @@ const IDL = JSON.parse(
     "utf-8"
   )
 );
+
+// ── Provider helper ───────────────────────────────────────────────────────────
+function makeProvider(connection: Connection, wallet: Keypair): AnchorProvider {
+  return new AnchorProvider(
+    connection,
+    {
+      publicKey: wallet.publicKey,
+      signTransaction: async (tx) => { tx.sign(wallet); return tx; },
+      signAllTransactions: async (txs) => { txs.forEach(t => t.sign(wallet)); return txs; },
+    },
+    { commitment: "confirmed" }
+  );
+}
 
 // ── Order types ───────────────────────────────────────────────────────────────
 interface LiveOrder {
@@ -178,51 +190,64 @@ async function main(): Promise<void> {
   console.log("ShadowDEX matching engine started");
   console.log("Matcher:", wallet.publicKey.toBase58());
 
-  // Get TEE auth token once at startup
-  let authToken: string;
-  try {
-    authToken = await getTeeAuthToken(wallet);
-    console.log("TEE auth established ✓");
-  } catch (e: any) {
-    console.warn("TEE auth failed, falling back to devnet:", e.message);
-  }
+  // Authenticate with TEE once at startup
+  const { token } = await getTeeAuthToken();
+  const teeConnection = getTeeConnection(token);
+  const teeProvider = makeProvider(teeConnection, wallet);
+  const teeProgram  = new Program(IDL as any, teeProvider);
 
-  // Read from base for the order book, settle inside rollup
-  const provider = getBaseProvider(wallet);
-  const program  = new Program(IDL as any, provider);
+  // Base provider for reading order book + delegation
+  const baseProvider = makeProvider(baseConnection, wallet);
+  const baseProgram  = new Program(IDL as any, baseProvider);
+
+  console.log("TEE session established ✓ — orders now private");
 
   while (true) {
     try {
-      await syncOrderBook(program);
+      // Read order book from base Solana
+      await syncOrderBook(baseProgram);
       const matches = findMatches();
 
       if (matches.length > 0) {
-        console.log(`Found ${matches.length} match(es)`);
+        console.log(`Found ${matches.length} match(es) — settling inside TEE...`);
+
         for (const { buy, sell, fillPrice, fillSize } of matches) {
-          // Settle inside the TEE rollup — invisible until committed
-          const sig = await settleMatchInRollup(
-            wallet,
-            buy.publicKey,
-            sell.publicKey,
-            buy.orderId,
-            sell.orderId,
-            fillPrice,
-            fillSize
-          );
+          try {
+            // Settle INSIDE the TEE — invisible to public mempool
+            const sig = await teeProgram.methods
+              .settleMatch(
+                new BN(buy.orderId),
+                new BN(sell.orderId),
+                new BN(fillPrice),
+                new BN(fillSize)
+              )
+              .accounts({
+                buyOrder:  buy.publicKey,
+                sellOrder: sell.publicKey,
+                matcher:   wallet.publicKey,
+              })
+              .signers([wallet])
+              .rpc();
 
-          // Commit both accounts back to base Solana with proof
-          await commitAndUndelegate(wallet, buy.publicKey);
-          await commitAndUndelegate(wallet, sell.publicKey);
+            console.log(`[TEE] Match settled privately ✓  sig: ${sig}`);
 
-          trades.push({
-            buyOrderId:  buy.orderId,
-            sellOrderId: sell.orderId,
-            fillPrice,
-            fillSize,
-            buyer:  buy.owner.toBase58(),
-            seller: sell.owner.toBase58(),
-            ts:     Date.now(),
-          });
+            // Commit final state back to Solana with proof
+            await commitAndUndelegate(wallet, buy.publicKey);
+            await commitAndUndelegate(wallet, sell.publicKey);
+
+            trades.push({
+              buyOrderId:  buy.orderId,
+              sellOrderId: sell.orderId,
+              fillPrice,
+              fillSize,
+              buyer:  buy.owner.toBase58(),
+              seller: sell.owner.toBase58(),
+              ts:     Date.now(),
+            });
+
+          } catch (e: any) {
+            console.error(`Match failed:`, e.message);
+          }
         }
       }
 
