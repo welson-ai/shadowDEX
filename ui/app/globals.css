@@ -1,27 +1,117 @@
 @import "@solana/wallet-adapter-react-ui/styles.css";
 @import "tailwindcss";
 
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap');
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg:        #080b0f;
+  --bg2:       #0e1318;
+  --bg3:       #141a21;
+  --border:    #1e2832;
+  --border2:   #2a3540;
+  --text:      #e2e8f0;
+  --muted:     #4a5568;
+  --muted2:    #2d3748;
+  --green:     #00ff88;
+  --green-dim: #00cc6a;
+  --green-bg:  rgba(0,255,136,0.06);
+  --red:       #ff4466;
+  --red-bg:    rgba(255,68,102,0.06);
+  --amber:     #ffaa00;
+  --font-mono: 'Space Mono', monospace;
+  --font-sans: 'Syne', sans-serif;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+* { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  min-height: 100vh;
 }
+
+/* ── Wallet adapter overrides ─────────────────────────────────────────── */
+.wallet-adapter-button {
+  font-family: var(--font-mono) !important;
+  font-size: 12px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.08em !important;
+  background: transparent !important;
+  border: 1px solid var(--border2) !important;
+  color: var(--text) !important;
+  border-radius: 6px !important;
+  padding: 10px 18px !important;
+  height: auto !important;
+  transition: all 0.15s ease !important;
+  text-transform: uppercase !important;
+}
+
+.wallet-adapter-button:hover {
+  background: var(--bg3) !important;
+  border-color: var(--green) !important;
+  color: var(--green) !important;
+}
+
+.wallet-adapter-button-trigger {
+  background: var(--green-bg) !important;
+  border-color: var(--green) !important;
+  color: var(--green) !important;
+}
+
+.wallet-adapter-modal-wrapper {
+  background: var(--bg2) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 12px !important;
+  font-family: var(--font-sans) !important;
+}
+
+.wallet-adapter-modal-title {
+  font-family: var(--font-sans) !important;
+  color: var(--text) !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button {
+  background: var(--bg3) !important;
+  border-color: var(--border) !important;
+  margin-bottom: 8px !important;
+}
+
+.wallet-adapter-modal-list .wallet-adapter-button:hover {
+  border-color: var(--green) !important;
+  color: var(--green) !important;
+}
+
+/* ── Scanline overlay ─────────────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.03) 2px,
+    rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ── Scrollbar ────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* ── Animations ───────────────────────────────────────────────────────── */
+@keyframes pulse-green {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-in { animation: slide-in 0.2s ease forwards; }

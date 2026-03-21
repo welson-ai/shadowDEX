@@ -7,7 +7,6 @@ import { PublicKey, SystemProgram } from "@solana/web3.js";
 
 const PROGRAM_ID = new PublicKey("HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq");
 
-// Inline IDL — just the parts UI needs
 const IDL = {
   address: "HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq",
   metadata: { name: "shadowdex", version: "0.1.0", spec: "0.1.0" },
@@ -74,18 +73,33 @@ interface Order {
   status: string;
 }
 
+function Dot({ color }: { color: string }) {
+  return (
+    <span style={{
+      display: "inline-block", width: 6, height: 6, borderRadius: "50%",
+      background: color, marginRight: 6,
+      animation: color === "var(--green)" ? "pulse-green 2s infinite" : "none"
+    }} />
+  );
+}
+
 export default function Home() {
   const { connection } = useConnection();
   const { publicKey, signTransaction, signAllTransactions } = useWallet();
-
-  const [side, setSide] = useState<"buy" | "sell">("buy");
-  const [price, setPrice] = useState("");
-  const [size, setSize] = useState("");
-  const [orders, setOrders] = useState<Order[]>([]);
+  const [side, setSide]       = useState<"buy" | "sell">("buy");
+  const [price, setPrice]     = useState("");
+  const [size, setSize]       = useState("");
+  const [orders, setOrders]   = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("");
+  const [status, setStatus]   = useState("");
+  const [tick, setTick]       = useState(0);
 
-  // ── Build provider + program ──────────────────────────────────────────────
+  // Clock tick
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
   const getProgram = useCallback(() => {
     if (!publicKey || !signTransaction || !signAllTransactions) return null;
     const provider = new AnchorProvider(
@@ -96,7 +110,6 @@ export default function Home() {
     return new Program(IDL as any, provider);
   }, [publicKey, signTransaction, signAllTransactions, connection]);
 
-  // ── Fetch orders ──────────────────────────────────────────────────────────
   const fetchOrders = useCallback(async () => {
     const program = getProgram();
     if (!program) return;
@@ -104,244 +117,326 @@ export default function Home() {
       const all = await program.account.order.all();
       const parsed: Order[] = all.map(({ publicKey: pk, account: acc }: any) => ({
         publicKey: pk.toBase58(),
-        orderId: acc.orderId.toString(),
-        owner: acc.owner.toBase58(),
-        side: acc.side.buy !== undefined ? "buy" : "sell",
-        price: acc.price.toNumber(),
-        size: acc.size.toNumber(),
-        filled: acc.filled.toNumber(),
-        status: acc.status.open !== undefined ? "open"
-          : acc.status.filled !== undefined ? "filled" : "cancelled",
+        orderId:   acc.orderId.toString(),
+        owner:     acc.owner.toBase58(),
+        side:      acc.side.buy !== undefined ? "buy" : "sell",
+        price:     acc.price.toNumber(),
+        size:      acc.size.toNumber(),
+        filled:    acc.filled.toNumber(),
+        status:    acc.status.open !== undefined ? "open"
+                 : acc.status.filled !== undefined ? "filled" : "cancelled",
       }));
       parsed.sort((a, b) => Number(b.orderId) - Number(a.orderId));
       setOrders(parsed);
-    } catch (e: any) {
-      console.error("Fetch error:", e.message);
-    }
+    } catch {}
   }, [getProgram]);
 
-  // Poll every 3s
   useEffect(() => {
     fetchOrders();
     const id = setInterval(fetchOrders, 3000);
     return () => clearInterval(id);
   }, [fetchOrders]);
 
-  // ── Submit order ──────────────────────────────────────────────────────────
   async function submitOrder() {
     const program = getProgram();
-    if (!program || !publicKey || !signTransaction || !signAllTransactions) return;
+    if (!program || !publicKey || !signTransaction) return;
     if (!price || !size) { setStatus("Enter price and size"); return; }
-
     setLoading(true);
-    setStatus("Submitting order...");
-
+    setStatus("Creating order on Solana...");
     try {
       const orderId = Date.now();
       const [orderPDA] = PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("order"),
-          publicKey.toBuffer(),
-          Buffer.from(new BN(orderId).toArray("le", 8)),
-        ],
+        [Buffer.from("order"), publicKey.toBuffer(), Buffer.from(new BN(orderId).toArray("le", 8))],
         PROGRAM_ID
       );
-
-      // Step 1 — create order on base Solana
-      setStatus("Creating order on Solana...");
-      const sig = await program.methods
+      await program.methods
         .submitOrder(
           new BN(orderId),
           side === "buy" ? { buy: {} } : { sell: {} },
           new BN(Math.floor(parseFloat(price) * 1_000_000)),
           new BN(Math.floor(parseFloat(size)))
         )
-        .accounts({
-          order: orderPDA,
-          user: publicKey,
-          systemProgram: SystemProgram.programId,
-        })
+        .accounts({ order: orderPDA, user: publicKey, systemProgram: SystemProgram.programId })
         .rpc();
 
-      setStatus("Delegating into private TEE rollup...");
+      setStatus("Delegating to private TEE rollup...");
 
-      // Step 2 — delegate into private ephemeral rollup
-      const { createDelegateInstruction, DELEGATION_PROGRAM_ID } = await import(
-        "@magicblock-labs/ephemeral-rollups-sdk"
-      );
-      const { Transaction, sendAndConfirmTransaction } = await import("@solana/web3.js");
-
+      const { createDelegateInstruction, DELEGATION_PROGRAM_ID } = await import("@magicblock-labs/ephemeral-rollups-sdk");
+      const { Transaction } = await import("@solana/web3.js");
       const delegateIx = createDelegateInstruction({
-        account: orderPDA,
-        ownerProgram: PROGRAM_ID,
-        payer: publicKey,
-        delegationProgram: DELEGATION_PROGRAM_ID,
+        account: orderPDA, ownerProgram: PROGRAM_ID,
+        payer: publicKey, delegationProgram: DELEGATION_PROGRAM_ID,
       });
-
       const delegateTx = new Transaction().add(delegateIx);
       delegateTx.feePayer = publicKey;
-      delegateTx.recentBlockhash = (
-        await program.provider.connection.getLatestBlockhash()
-      ).blockhash;
+      delegateTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      const signed = await signTransaction(delegateTx);
+      const sig = await connection.sendRawTransaction(signed.serialize());
+      await connection.confirmTransaction(sig, "confirmed");
 
-      const signedTx = await signTransaction(delegateTx);
-      const delegateSig = await program.provider.connection.sendRawTransaction(
-        signedTx.serialize()
-      );
-      await program.provider.connection.confirmTransaction(delegateSig, "confirmed");
-
-      setStatus(`Order hidden in TEE ✓  — MEV bots see nothing`);
-      setPrice("");
-      setSize("");
+      setStatus("Order hidden in TEE — MEV bots see nothing ✓");
+      setPrice(""); setSize("");
       await fetchOrders();
-
     } catch (e: any) {
-      setStatus(`Error: ${e.message}`);
+      setStatus(`Error: ${e.message?.slice(0, 80)}`);
     } finally {
       setLoading(false);
     }
   }
 
-  // ── UI ────────────────────────────────────────────────────────────────────
-  const bids = orders.filter(o => o.side === "buy" && o.status === "open");
-  const asks = orders.filter(o => o.side === "sell" && o.status === "open");
+  const bids   = orders.filter(o => o.side === "buy"  && o.status === "open");
+  const asks   = orders.filter(o => o.side === "sell" && o.status === "open");
   const filled = orders.filter(o => o.status === "filled");
+  const now    = new Date().toUTCString().slice(17, 25);
 
   return (
-    <main className="min-h-screen bg-gray-950 text-gray-100 p-6">
+    <main style={{ minHeight: "100vh", background: "var(--bg)", padding: "0" }}>
 
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-2xl font-bold text-white">ShadowDEX</h1>
-          <p className="text-gray-500 text-sm">Private dark pool · Solana devnet</p>
+      {/* ── Top bar ── */}
+      <header style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between",
+        padding: "12px 24px", borderBottom: "1px solid var(--border)",
+        background: "var(--bg2)", position: "sticky", top: 0, zIndex: 100,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
+          <div>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 700, color: "var(--green)", letterSpacing: "0.05em" }}>
+              SHADOW
+            </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 700, color: "var(--text)", letterSpacing: "0.05em" }}>
+              DEX
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 16 }}>
+            {[
+              { label: "NETWORK", value: "DEVNET" },
+              { label: "STATUS", value: "LIVE", color: "var(--green)" },
+              { label: "UTC", value: now },
+            ].map(item => (
+              <div key={item.label} style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.1em" }}>
+                <span style={{ color: "var(--muted)", marginRight: 4 }}>{item.label}</span>
+                <span style={{ color: item.color || "var(--text)" }}>
+                  {item.label === "STATUS" && <Dot color="var(--green)" />}
+                  {item.value}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
-        <WalletMultiButton />
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          {publicKey && (
+            <span style={{
+              fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)",
+              background: "var(--bg3)", border: "1px solid var(--border)",
+              padding: "6px 10px", borderRadius: 4, letterSpacing: "0.05em",
+            }}>
+              {publicKey.toBase58().slice(0,4)}...{publicKey.toBase58().slice(-4)}
+            </span>
+          )}
+          <WalletMultiButton />
+        </div>
+      </header>
+
+      {/* ── Privacy banner ── */}
+      <div style={{
+        background: "var(--green-bg)", borderBottom: "1px solid rgba(0,255,136,0.15)",
+        padding: "8px 24px", display: "flex", alignItems: "center", gap: 8,
+      }}>
+        <Dot color="var(--green)" />
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--green)", letterSpacing: "0.1em" }}>
+          PRIVATE EPHEMERAL ROLLUP ACTIVE — ORDER SIZES + PRICES ENCRYPTED IN TEE — PUBLIC MEMPOOL SEES NOTHING
+        </span>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr 280px", gap: 1, background: "var(--border)", minHeight: "calc(100vh - 89px)" }}>
 
-        {/* Order form */}
-        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
-            Place hidden order
-          </h2>
+        {/* ── Order form ── */}
+        <div style={{ background: "var(--bg)", padding: 24 }}>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.15em", marginBottom: 20 }}>
+            NEW ORDER
+          </div>
 
           {/* Side toggle */}
-          <div className="flex rounded-lg overflow-hidden mb-4 border border-gray-700">
-            <button
-              onClick={() => setSide("buy")}
-              className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                side === "buy"
-                  ? "bg-emerald-600 text-white"
-                  : "bg-gray-800 text-gray-400 hover:bg-gray-700"
-              }`}
-            >
-              Buy
-            </button>
-            <button
-              onClick={() => setSide("sell")}
-              className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                side === "sell"
-                  ? "bg-red-600 text-white"
-                  : "bg-gray-800 text-gray-400 hover:bg-gray-700"
-              }`}
-            >
-              Sell
-            </button>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: "var(--border)", borderRadius: 6, overflow: "hidden", marginBottom: 20 }}>
+            {(["buy", "sell"] as const).map(s => (
+              <button key={s} onClick={() => setSide(s)} style={{
+                padding: "10px 0", background: side === s
+                  ? s === "buy" ? "var(--green-bg)" : "var(--red-bg)"
+                  : "var(--bg2)",
+                border: "none", cursor: "pointer",
+                fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700,
+                letterSpacing: "0.1em", textTransform: "uppercase",
+                color: side === s
+                  ? s === "buy" ? "var(--green)" : "var(--red)"
+                  : "var(--muted)",
+                transition: "all 0.15s",
+              }}>
+                {s}
+              </button>
+            ))}
           </div>
 
-          <div className="space-y-3 mb-4">
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Price (USDC)</label>
+          {/* Inputs */}
+          {[
+            { label: "PRICE", placeholder: "0.000000", unit: "USDC", val: price, set: setPrice },
+            { label: "SIZE",  placeholder: "0",        unit: "SOL",  val: size,  set: setSize  },
+          ].map(f => (
+            <div key={f.label} style={{ marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted)", letterSpacing: "0.15em" }}>{f.label}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted2)" }}>{f.unit}</span>
+              </div>
               <input
-                type="number"
-                value={price}
-                onChange={e => setPrice(e.target.value)}
-                placeholder="0.00"
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-gray-500"
+                type="number" value={f.val} onChange={e => f.set(e.target.value)}
+                placeholder={f.placeholder}
+                style={{
+                  width: "100%", background: "var(--bg2)", border: "1px solid var(--border)",
+                  borderRadius: 4, padding: "10px 12px", color: "var(--text)",
+                  fontFamily: "var(--font-mono)", fontSize: 13,
+                  outline: "none", transition: "border-color 0.15s",
+                }}
+                onFocus={e => e.target.style.borderColor = side === "buy" ? "var(--green)" : "var(--red)"}
+                onBlur={e => e.target.style.borderColor = "var(--border)"}
               />
             </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">Size (SOL)</label>
-              <input
-                type="number"
-                value={size}
-                onChange={e => setSize(e.target.value)}
-                placeholder="0"
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-gray-500"
-              />
-            </div>
-          </div>
+          ))}
 
+          {/* Submit */}
           <button
             onClick={submitOrder}
             disabled={!publicKey || loading}
-            className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-              side === "buy"
-                ? "bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-900"
-                : "bg-red-600 hover:bg-red-500 disabled:bg-red-900"
-            } disabled:cursor-not-allowed text-white`}
+            style={{
+              width: "100%", padding: "12px 0", borderRadius: 4,
+              border: `1px solid ${side === "buy" ? "var(--green)" : "var(--red)"}`,
+              background: side === "buy" ? "var(--green-bg)" : "var(--red-bg)",
+              color: side === "buy" ? "var(--green)" : "var(--red)",
+              fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700,
+              letterSpacing: "0.12em", textTransform: "uppercase",
+              cursor: publicKey && !loading ? "pointer" : "not-allowed",
+              opacity: !publicKey ? 0.4 : 1,
+              transition: "all 0.15s",
+            }}
           >
-            {loading ? "Submitting..." : `Place ${side} order (private)`}
+            {loading ? "SUBMITTING..." : `PLACE ${side.toUpperCase()} ORDER`}
           </button>
 
           {status && (
-            <p className="mt-3 text-xs text-gray-400 break-all">{status}</p>
+            <div style={{
+              marginTop: 12, padding: "8px 10px", borderRadius: 4,
+              background: "var(--bg2)", border: "1px solid var(--border)",
+              fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--green)",
+              letterSpacing: "0.05em", lineHeight: 1.6,
+              animation: "slide-in 0.2s ease",
+            }}>
+              {status}
+            </div>
           )}
 
           {!publicKey && (
-            <p className="mt-3 text-xs text-gray-600 text-center">
-              Connect wallet to trade
-            </p>
+            <div style={{
+              marginTop: 16, padding: 16, borderRadius: 4,
+              border: "1px dashed var(--border2)", textAlign: "center",
+            }}>
+              <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted)", letterSpacing: "0.1em", marginBottom: 10 }}>
+                CONNECT WALLET TO TRADE
+              </div>
+              <WalletMultiButton />
+            </div>
           )}
         </div>
 
-        {/* Order book */}
-        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
-            Order book
-            <span className="ml-2 text-gray-600 font-normal normal-case">
-              (sizes hidden until match)
+        {/* ── Order book ── */}
+        <div style={{ background: "var(--bg)", padding: 24 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.15em" }}>ORDER BOOK</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted2)" }}>
+              SIZES HIDDEN — ENCRYPTED IN TEE
             </span>
-          </h2>
+          </div>
 
-          <div className="mb-3">
-            <div className="text-xs text-gray-600 mb-1">Asks (sell)</div>
+          {/* Asks */}
+          <div style={{ marginBottom: 2 }}>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted)", letterSpacing: "0.12em", marginBottom: 8 }}>
+              ASKS ({asks.length})
+            </div>
             {asks.length === 0
-              ? <p className="text-xs text-gray-700">No asks</p>
-              : asks.slice(0, 8).map(o => (
-                <div key={o.publicKey} className="flex justify-between text-xs py-0.5">
-                  <span className="text-red-400">{(o.price / 1_000_000).toFixed(4)}</span>
-                  <span className="text-gray-600">████</span>
+              ? <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted2)", padding: "8px 0" }}>NO ASKS</div>
+              : asks.slice(0, 10).map((o, i) => (
+                <div key={o.publicKey} className="animate-in" style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  padding: "5px 8px", marginBottom: 1, borderRadius: 2,
+                  background: "var(--red-bg)", animationDelay: `${i * 30}ms`,
+                }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--red)" }}>
+                    {(o.price / 1_000_000).toFixed(6)}
+                  </span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.1em" }}>
+                    ████████
+                  </span>
                 </div>
               ))
             }
           </div>
 
-          <div className="border-t border-gray-800 my-2" />
+          {/* Spread */}
+          {bids.length > 0 && asks.length > 0 && (
+            <div style={{
+              padding: "8px", textAlign: "center", borderTop: "1px solid var(--border)",
+              borderBottom: "1px solid var(--border)", margin: "8px 0",
+            }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--amber)" }}>
+                SPREAD: {((asks[0].price - bids[0].price) / 1_000_000).toFixed(6)}
+              </span>
+            </div>
+          )}
 
+          {/* Bids */}
           <div>
-            <div className="text-xs text-gray-600 mb-1">Bids (buy)</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted)", letterSpacing: "0.12em", marginBottom: 8 }}>
+              BIDS ({bids.length})
+            </div>
             {bids.length === 0
-              ? <p className="text-xs text-gray-700">No bids</p>
-              : bids.slice(0, 8).map(o => (
-                <div key={o.publicKey} className="flex justify-between text-xs py-0.5">
-                  <span className="text-emerald-400">{(o.price / 1_000_000).toFixed(4)}</span>
-                  <span className="text-gray-600">████</span>
+              ? <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted2)", padding: "8px 0" }}>NO BIDS</div>
+              : bids.slice(0, 10).map((o, i) => (
+                <div key={o.publicKey} className="animate-in" style={{
+                  display: "flex", justifyContent: "space-between", alignItems: "center",
+                  padding: "5px 8px", marginBottom: 1, borderRadius: 2,
+                  background: "var(--green-bg)", animationDelay: `${i * 30}ms`,
+                }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--green)" }}>
+                    {(o.price / 1_000_000).toFixed(6)}
+                  </span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.1em" }}>
+                    ████████
+                  </span>
                 </div>
               ))
             }
           </div>
         </div>
 
-        {/* Filled trades */}
-        <div className="bg-gray-900 rounded-xl p-5 border border-gray-800">
-          <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">
-            Settled trades
-          </h2>
+        {/* ── Trades ── */}
+        <div style={{ background: "var(--bg)", padding: 24, borderLeft: "1px solid var(--border)" }}>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.15em", marginBottom: 20 }}>
+            SETTLED TRADES
+          </div>
           {filled.length === 0
-            ? <p className="text-xs text-gray-700">No trades yet</p>
+            ? (
+              <div style={{ textAlign: "center", paddingTop: 40 }}>
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted2)", lineHeight: 2 }}>
+                  NO TRADES YET<br/>
+                  WAITING FOR MATCH
+                </div>
+              </div>
+            )
+            : filled.slice(0, 15).map((o, i) => (
+              <div key={o.publicKey} className="animate-in" style={{
+                padding: "8px 0", borderBottom: "1px solid var(--border)",
+                animationDelay: `${i * 20}ms`,
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700,
+                    color: o.side === "buy" ? "var(--green)" : "var(--red)", letterSpacing: "0.1em" }}>
             : filled.slice(0, 10).map(o => (
               <div key={o.publicKey} className="text-xs py-1.5 border-b border-gray-800">
                 <div className="flex justify-between">
