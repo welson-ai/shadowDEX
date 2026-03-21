@@ -13,7 +13,7 @@ const IDL = {
   instructions: [
     {
       name: "submit_order",
-      discriminator: [171, 108, 95, 234, 52, 6, 205, 82],
+      discriminator: [230, 150, 200, 53, 92, 208, 109, 108],
       accounts: [
         { name: "order", writable: true, pda: { seeds: [{ kind: "const", value: [111,114,100,101,114] }, { kind: "account", path: "user" }, { kind: "arg", path: "order_id" }] } },
         { name: "user", writable: true, signer: true },
