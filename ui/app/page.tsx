@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { Program, AnchorProvider, BN } from "@coral-xyz/anchor";
-import { PublicKey, SystemProgram } from "@solana/web3.js";
+import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 
 const PROGRAM_ID = new PublicKey("HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq");
 
@@ -21,35 +21,39 @@ const IDL = {
       ],
       args: [
         { name: "order_id", type: "u64" },
-        { name: "side", type: { defined: { name: "OrderSide" } } },
-        { name: "price", type: "u64" },
-        { name: "size", type: "u64" },
+        { name: "side",     type: { defined: { name: "OrderSide" } } },
+        { name: "price",    type: "u64" },
+        { name: "size",     type: "u64" },
       ],
     },
   ],
   accounts: [{ name: "Order", discriminator: [134, 173, 232, 200, 169, 188, 237, 4] }],
   types: [
-    { name: "OrderSide", type: { kind: "enum", variants: [{ name: "Buy" }, { name: "Sell" }] } },
+    { name: "OrderSide",   type: { kind: "enum", variants: [{ name: "Buy" }, { name: "Sell" }] } },
     { name: "OrderStatus", type: { kind: "enum", variants: [{ name: "Open" }, { name: "Filled" }, { name: "Cancelled" }] } },
     { name: "Order", type: { kind: "struct", fields: [
-      { name: "owner", type: "pubkey" }, { name: "order_id", type: "u64" },
-      { name: "side", type: { defined: { name: "OrderSide" } } }, { name: "price", type: "u64" },
-      { name: "size", type: "u64" }, { name: "filled", type: "u64" },
-      { name: "status", type: { defined: { name: "OrderStatus" } } },
-      { name: "timestamp", type: "i64" }, { name: "bump", type: "u8" },
+      { name: "owner",     type: "pubkey" },
+      { name: "order_id",  type: "u64" },
+      { name: "side",      type: { defined: { name: "OrderSide" } } },
+      { name: "price",     type: "u64" },
+      { name: "size",      type: "u64" },
+      { name: "filled",    type: "u64" },
+      { name: "status",    type: { defined: { name: "OrderStatus" } } },
+      { name: "timestamp", type: "i64" },
+      { name: "bump",      type: "u8" },
     ]}},
   ],
-};
+} as const;
 
 interface Order {
   publicKey: string;
-  orderId: string;
-  owner: string;
-  side: string;
-  price: number;
-  size: number;
-  filled: number;
-  status: string;
+  orderId:   string;
+  owner:     string;
+  side:      string;
+  price:     number;
+  size:      number;
+  filled:    number;
+  status:    string;
 }
 
 function Dot({ color }: { color: string }) {
@@ -57,7 +61,7 @@ function Dot({ color }: { color: string }) {
     <span style={{
       display: "inline-block", width: 6, height: 6, borderRadius: "50%",
       background: color, marginRight: 6,
-      animation: color === "var(--green)" ? "pulse-green 2s infinite" : "none"
+      animation: color === "var(--green)" ? "pulse-green 2s infinite" : "none",
     }} />
   );
 }
@@ -65,19 +69,13 @@ function Dot({ color }: { color: string }) {
 export default function Home() {
   const { connection } = useConnection();
   const { publicKey, signTransaction, signAllTransactions } = useWallet();
-  const [side, setSide]       = useState<"buy" | "sell">("buy");
-  const [price, setPrice]     = useState("");
-  const [size, setSize]       = useState("");
-  const [orders, setOrders]   = useState<Order[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [status, setStatus]   = useState("");
-  const [tick, setTick]       = useState(0);
 
-  // Clock tick
-  useEffect(() => {
-    const id = setInterval(() => setTick(t => t + 1), 1000);
-    return () => clearInterval(id);
-  }, []);
+  const [side,    setSide]    = useState<"buy" | "sell">("buy");
+  const [price,   setPrice]   = useState("");
+  const [size,    setSize]    = useState("");
+  const [orders,  setOrders]  = useState<Order[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [status,  setStatus]  = useState("");
 
   const getProgram = useCallback(() => {
     if (!publicKey || !signTransaction || !signAllTransactions) return null;
@@ -102,8 +100,9 @@ export default function Home() {
         price:     acc.price.toNumber(),
         size:      acc.size.toNumber(),
         filled:    acc.filled.toNumber(),
-        status:    acc.status.open !== undefined ? "open"
-                 : acc.status.filled !== undefined ? "filled" : "cancelled",
+        status:    acc.status.open      !== undefined ? "open"
+                 : acc.status.filled    !== undefined ? "filled"
+                 : "cancelled",
       }));
       parsed.sort((a, b) => Number(b.orderId) - Number(a.orderId));
       setOrders(parsed);
@@ -125,9 +124,14 @@ export default function Home() {
     try {
       const orderId = Date.now();
       const [orderPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("order"), publicKey.toBuffer(), Buffer.from(new BN(orderId).toArray("le", 8))],
+        [
+          Buffer.from("order"),
+          publicKey.toBuffer(),
+          Buffer.from(new BN(orderId).toArray("le", 8)),
+        ],
         PROGRAM_ID
       );
+
       await program.methods
         .submitOrder(
           new BN(orderId),
@@ -135,29 +139,41 @@ export default function Home() {
           new BN(Math.floor(parseFloat(price) * 1_000_000)),
           new BN(Math.floor(parseFloat(size)))
         )
-        .accounts({ order: orderPDA, user: publicKey, systemProgram: SystemProgram.programId })
+        .accounts({
+          order:         orderPDA,
+          user:          publicKey,
+          systemProgram: SystemProgram.programId,
+        })
         .rpc();
 
       setStatus("Delegating to private TEE rollup...");
 
-      const { createDelegateInstruction, DELEGATION_PROGRAM_ID } = await import("@magicblock-labs/ephemeral-rollups-sdk");
-      const { Transaction } = await import("@solana/web3.js");
+      const { createDelegateInstruction, DELEGATION_PROGRAM_ID } =
+        await import("@magicblock-labs/ephemeral-rollups-sdk");
+
       const delegateIx = createDelegateInstruction({
-        account: orderPDA, ownerProgram: PROGRAM_ID,
-        payer: publicKey, delegationProgram: DELEGATION_PROGRAM_ID,
+        account:           orderPDA,
+        ownerProgram:      PROGRAM_ID,
+        payer:             publicKey,
+        delegationProgram: DELEGATION_PROGRAM_ID,
       });
+
       const delegateTx = new Transaction().add(delegateIx);
       delegateTx.feePayer = publicKey;
-      delegateTx.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      delegateTx.recentBlockhash = (
+        await connection.getLatestBlockhash()
+      ).blockhash;
+
       const signed = await signTransaction(delegateTx);
-      const sig = await connection.sendRawTransaction(signed.serialize());
-      await connection.confirmTransaction(sig, "confirmed");
+      const delSig = await connection.sendRawTransaction(signed.serialize());
+      await connection.confirmTransaction(delSig, "confirmed");
 
       setStatus("Order hidden in TEE — MEV bots see nothing ✓");
-      setPrice(""); setSize("");
+      setPrice("");
+      setSize("");
       await fetchOrders();
     } catch (e: any) {
-      setStatus(`Error: ${e.message?.slice(0, 80)}`);
+      setStatus(`Error: ${e.message?.slice(0, 120)}`);
     } finally {
       setLoading(false);
     }
@@ -169,9 +185,9 @@ export default function Home() {
   const now    = new Date().toUTCString().slice(17, 25);
 
   return (
-    <main style={{ minHeight: "100vh", background: "var(--bg)", padding: "0" }}>
+    <main style={{ minHeight: "100vh", background: "var(--bg)" }}>
 
-      {/* ── Top bar ── */}
+      {/* ── Header ── */}
       <header style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "12px 24px", borderBottom: "1px solid var(--border)",
@@ -179,22 +195,18 @@ export default function Home() {
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 24 }}>
           <div>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 700, color: "var(--green)", letterSpacing: "0.05em" }}>
-              SHADOW
-            </span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 700, color: "var(--text)", letterSpacing: "0.05em" }}>
-              DEX
-            </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 700, color: "var(--green)", letterSpacing: "0.05em" }}>SHADOW</span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 18, fontWeight: 700, color: "var(--text)",  letterSpacing: "0.05em" }}>DEX</span>
           </div>
           <div style={{ display: "flex", gap: 16 }}>
             {[
               { label: "NETWORK", value: "DEVNET" },
-              { label: "STATUS", value: "LIVE", color: "var(--green)" },
-              { label: "UTC", value: now },
+              { label: "STATUS",  value: "LIVE", color: "var(--green)" },
+              { label: "UTC",     value: now },
             ].map(item => (
               <div key={item.label} style={{ fontFamily: "var(--font-mono)", fontSize: 10, letterSpacing: "0.1em" }}>
                 <span style={{ color: "var(--muted)", marginRight: 4 }}>{item.label}</span>
-                <span style={{ color: item.color || "var(--text)" }}>
+                <span style={{ color: item.color ?? "var(--text)" }}>
                   {item.label === "STATUS" && <Dot color="var(--green)" />}
                   {item.value}
                 </span>
@@ -207,9 +219,9 @@ export default function Home() {
             <span style={{
               fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)",
               background: "var(--bg3)", border: "1px solid var(--border)",
-              padding: "6px 10px", borderRadius: 4, letterSpacing: "0.05em",
+              padding: "6px 10px", borderRadius: 4,
             }}>
-              {publicKey.toBase58().slice(0,4)}...{publicKey.toBase58().slice(-4)}
+              {publicKey.toBase58().slice(0, 4)}...{publicKey.toBase58().slice(-4)}
             </span>
           )}
           <WalletMultiButton />
@@ -227,7 +239,12 @@ export default function Home() {
         </span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr 280px", gap: 1, background: "var(--border)", minHeight: "calc(100vh - 89px)" }}>
+      {/* ── Main grid ── */}
+      <div style={{
+        display: "grid", gridTemplateColumns: "340px 1fr 280px",
+        gap: 1, background: "var(--border)",
+        minHeight: "calc(100vh - 89px)",
+      }}>
 
         {/* ── Order form ── */}
         <div style={{ background: "var(--bg)", padding: 24 }}>
@@ -239,10 +256,10 @@ export default function Home() {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: "var(--border)", borderRadius: 6, overflow: "hidden", marginBottom: 20 }}>
             {(["buy", "sell"] as const).map(s => (
               <button key={s} onClick={() => setSide(s)} style={{
-                padding: "10px 0", background: side === s
+                padding: "10px 0", cursor: "pointer", border: "none",
+                background: side === s
                   ? s === "buy" ? "var(--green-bg)" : "var(--red-bg)"
                   : "var(--bg2)",
-                border: "none", cursor: "pointer",
                 fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700,
                 letterSpacing: "0.1em", textTransform: "uppercase",
                 color: side === s
@@ -266,21 +283,23 @@ export default function Home() {
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted2)" }}>{f.unit}</span>
               </div>
               <input
-                type="number" value={f.val} onChange={e => f.set(e.target.value)}
+                type="number"
+                value={f.val}
+                onChange={e => f.set(e.target.value)}
                 placeholder={f.placeholder}
                 style={{
-                  width: "100%", background: "var(--bg2)", border: "1px solid var(--border)",
-                  borderRadius: 4, padding: "10px 12px", color: "var(--text)",
-                  fontFamily: "var(--font-mono)", fontSize: 13,
-                  outline: "none", transition: "border-color 0.15s",
+                  width: "100%", background: "var(--bg2)",
+                  border: "1px solid var(--border)", borderRadius: 4,
+                  padding: "10px 12px", color: "var(--text)",
+                  fontFamily: "var(--font-mono)", fontSize: 13, outline: "none",
                 }}
-                onFocus={e => e.target.style.borderColor = side === "buy" ? "var(--green)" : "var(--red)"}
-                onBlur={e => e.target.style.borderColor = "var(--border)"}
+                onFocus={e => (e.target.style.borderColor = side === "buy" ? "var(--green)" : "var(--red)")}
+                onBlur={e =>  (e.target.style.borderColor = "var(--border)")}
               />
             </div>
           ))}
 
-          {/* Submit */}
+          {/* Submit button */}
           <button
             onClick={submitOrder}
             disabled={!publicKey || loading}
@@ -299,18 +318,19 @@ export default function Home() {
             {loading ? "SUBMITTING..." : `PLACE ${side.toUpperCase()} ORDER`}
           </button>
 
+          {/* Status */}
           {status && (
             <div style={{
               marginTop: 12, padding: "8px 10px", borderRadius: 4,
               background: "var(--bg2)", border: "1px solid var(--border)",
               fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--green)",
               letterSpacing: "0.05em", lineHeight: 1.6,
-              animation: "slide-in 0.2s ease",
             }}>
               {status}
             </div>
           )}
 
+          {/* Connect prompt */}
           {!publicKey && (
             <div style={{
               marginTop: 16, padding: 16, borderRadius: 4,
@@ -328,30 +348,26 @@ export default function Home() {
         <div style={{ background: "var(--bg)", padding: 24 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
             <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.15em" }}>ORDER BOOK</span>
-            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted2)" }}>
-              SIZES HIDDEN — ENCRYPTED IN TEE
-            </span>
+            <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted2)" }}>SIZES HIDDEN — ENCRYPTED IN TEE</span>
           </div>
 
           {/* Asks */}
-          <div style={{ marginBottom: 2 }}>
+          <div style={{ marginBottom: 4 }}>
             <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted)", letterSpacing: "0.12em", marginBottom: 8 }}>
               ASKS ({asks.length})
             </div>
             {asks.length === 0
               ? <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted2)", padding: "8px 0" }}>NO ASKS</div>
-              : asks.slice(0, 10).map((o, i) => (
-                <div key={o.publicKey} className="animate-in" style={{
+              : asks.slice(0, 10).map(o => (
+                <div key={o.publicKey} style={{
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                   padding: "5px 8px", marginBottom: 1, borderRadius: 2,
-                  background: "var(--red-bg)", animationDelay: `${i * 30}ms`,
+                  background: "var(--red-bg)",
                 }}>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--red)" }}>
                     {(o.price / 1_000_000).toFixed(6)}
                   </span>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.1em" }}>
-                    ████████
-                  </span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)" }}>████████</span>
                 </div>
               ))
             }
@@ -360,8 +376,9 @@ export default function Home() {
           {/* Spread */}
           {bids.length > 0 && asks.length > 0 && (
             <div style={{
-              padding: "8px", textAlign: "center", borderTop: "1px solid var(--border)",
-              borderBottom: "1px solid var(--border)", margin: "8px 0",
+              padding: "8px", textAlign: "center",
+              borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)",
+              margin: "8px 0",
             }}>
               <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--amber)" }}>
                 SPREAD: {((asks[0].price - bids[0].price) / 1_000_000).toFixed(6)}
@@ -376,25 +393,23 @@ export default function Home() {
             </div>
             {bids.length === 0
               ? <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted2)", padding: "8px 0" }}>NO BIDS</div>
-              : bids.slice(0, 10).map((o, i) => (
-                <div key={o.publicKey} className="animate-in" style={{
+              : bids.slice(0, 10).map(o => (
+                <div key={o.publicKey} style={{
                   display: "flex", justifyContent: "space-between", alignItems: "center",
                   padding: "5px 8px", marginBottom: 1, borderRadius: 2,
-                  background: "var(--green-bg)", animationDelay: `${i * 30}ms`,
+                  background: "var(--green-bg)",
                 }}>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--green)" }}>
                     {(o.price / 1_000_000).toFixed(6)}
                   </span>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.1em" }}>
-                    ████████
-                  </span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)" }}>████████</span>
                 </div>
               ))
             }
           </div>
         </div>
 
-        {/* ── Trades ── */}
+        {/* ── Settled trades ── */}
         <div style={{ background: "var(--bg)", padding: 24, borderLeft: "1px solid var(--border)" }}>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.15em", marginBottom: 20 }}>
             SETTLED TRADES
@@ -403,19 +418,18 @@ export default function Home() {
             ? (
               <div style={{ textAlign: "center", paddingTop: 40 }}>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted2)", lineHeight: 2 }}>
-                  NO TRADES YET<br/>
-                  WAITING FOR MATCH
+                  NO TRADES YET<br />WAITING FOR MATCH
                 </div>
               </div>
             )
-            : filled.slice(0, 15).map((o, i) => (
-              <div key={o.publicKey} className="animate-in" style={{
-                padding: "8px 0", borderBottom: "1px solid var(--border)",
-                animationDelay: `${i * 20}ms`,
-              }}>
+            : filled.slice(0, 15).map(o => (
+              <div key={o.publicKey} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
-                  <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700,
-                    color: o.side === "buy" ? "var(--green)" : "var(--red)", letterSpacing: "0.1em" }}>
+                  <span style={{
+                    fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 700,
+                    color: o.side === "buy" ? "var(--green)" : "var(--red)",
+                    letterSpacing: "0.1em",
+                  }}>
                     {o.side.toUpperCase()}
                   </span>
                   <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text)" }}>
@@ -423,27 +437,13 @@ export default function Home() {
                   </span>
                 </div>
                 <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--muted)" }}>
-                  {o.owner.slice(0,6)}...{o.owner.slice(-4)}
+                  {o.owner.slice(0, 6)}...{o.owner.slice(-4)}
                 </div>
               </div>
             ))
           }
         </div>
-
       </div>
-
-      {/* Privacy callout */}
-      <div className="mt-6 bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-start gap-3">
-        <div className="w-2 h-2 rounded-full bg-emerald-500 mt-1.5 flex-shrink-0" />
-        <div>
-          <p className="text-sm text-gray-300 font-medium">Orders are invisible to MEV bots</p>
-          <p className="text-xs text-gray-600 mt-0.5">
-            Order sizes and prices live only inside MagicBlock private ephemeral rollup TEE.
-            The public mempool sees nothing until settlement is final on Solana.
-          </p>
-        </div>
-      </div>
-
     </main>
   );
 }
