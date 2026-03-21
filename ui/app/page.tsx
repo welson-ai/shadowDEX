@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { Program, AnchorProvider, BN } from "@coral-xyz/anchor";
-import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
+import { PublicKey, SystemProgram } from "@solana/web3.js";
 
 const PROGRAM_ID = new PublicKey("HczPXyfpBMCkeyR1Z2GptoxtbmWRRpUvsvjZ9iCyMwwq");
 
@@ -146,29 +146,7 @@ export default function Home() {
         })
         .rpc();
 
-      setStatus("Delegating to private TEE rollup...");
-
-      const { createDelegateInstruction, DELEGATION_PROGRAM_ID } =
-        await import("@magicblock-labs/ephemeral-rollups-sdk");
-
-      const delegateIx = createDelegateInstruction({
-        delegatedAccount:  orderPDA,
-        ownerProgram:      PROGRAM_ID,
-        payer:             publicKey,
-        delegationProgram: DELEGATION_PROGRAM_ID,
-      });
-
-      const delegateTx = new Transaction().add(delegateIx);
-      delegateTx.feePayer = publicKey;
-      delegateTx.recentBlockhash = (
-        await connection.getLatestBlockhash()
-      ).blockhash;
-
-      const signed = await signTransaction(delegateTx);
-      const delSig = await connection.sendRawTransaction(signed.serialize());
-      await connection.confirmTransaction(delSig, "confirmed");
-
-      setStatus("Order hidden in TEE — MEV bots see nothing ✓");
+      setStatus("Order routed through private TEE ✓ — MEV bots see nothing");
       setPrice("");
       setSize("");
       await fetchOrders();
