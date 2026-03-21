@@ -152,7 +152,7 @@ export default function Home() {
         await import("@magicblock-labs/ephemeral-rollups-sdk");
 
       const delegateIx = createDelegateInstruction({
-        account:           orderPDA,
+        delegatedAccount:  orderPDA,
         ownerProgram:      PROGRAM_ID,
         payer:             publicKey,
         delegationProgram: DELEGATION_PROGRAM_ID,

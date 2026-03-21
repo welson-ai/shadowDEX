@@ -112,9 +112,9 @@ export async function delegateOrder(
   console.log(`[delegate] Delegating ${orderAccount.toBase58()} into TEE rollup...`);
 
   const ix = createDelegateInstruction({
-    account:            orderAccount,
-    ownerProgram:       PROGRAM_ID,
-    payer:              wallet.publicKey,
+    delegatedAccount:  orderAccount,
+    ownerProgram:      PROGRAM_ID,
+    payer:             wallet.publicKey,
     delegationProgram:  DELEGATION_PROGRAM_ID,
   });
 
