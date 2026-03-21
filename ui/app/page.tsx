@@ -15,7 +15,7 @@ const IDL = {
       name: "submit_order",
       discriminator: [230, 150, 200, 53, 92, 208, 109, 108],
       accounts: [
-        { name: "order", writable: true, pda: { seeds: [{ kind: "const", value: [111,114,100,101,114] }, { kind: "account", path: "user" }, { kind: "arg", path: "order_id" }] } },
+        { name: "order", writable: true },
         { name: "user", writable: true, signer: true },
         { name: "system_program", address: "11111111111111111111111111111111" },
       ],
