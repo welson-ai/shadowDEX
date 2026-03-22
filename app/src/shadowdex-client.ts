@@ -138,10 +138,10 @@ export async function getTeeAuthToken(): Promise<{ token: string; expiresAt: num
 
 // ── TEE-authenticated connection ──────────────────────────────────────────────
 export function getTeeConnection(token: string): Connection {
-  return new Connection(process.env.TEE_RPC!, {
-    commitment: "confirmed",
-    httpHeaders: { Authorization: `Bearer ${token}` },
-  });
+  return new Connection(
+    `https://tee.magicblock.app?token=${token}`,
+    { commitment: "confirmed" }
+  );
 }
 
 // ── Step 4: Settle match inside the rollup ────────────────────────────────────
