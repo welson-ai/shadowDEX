@@ -111,11 +111,12 @@ export default function Home() {
 
   useEffect(() => {
     fetchOrders();
-    const id = setInterval(fetchOrders, 3000);
+    const id = setInterval(fetchOrders, 10000);
     return () => clearInterval(id);
   }, [fetchOrders]);
 
   async function submitOrder() {
+    const currentSide = side; // capture at call time
     const program = getProgram();
     if (!program || !publicKey || !signTransaction) return;
     if (!price || !size) { setStatus("Enter price and size"); return; }
@@ -132,10 +133,12 @@ export default function Home() {
         PROGRAM_ID
       );
 
+      console.log("Submitting side:", currentSide);
+
       await program.methods
         .submitOrder(
           new BN(orderId),
-          side === "buy" ? { buy: {} } : { sell: {} },
+          currentSide === "buy" ? { buy: {} } : { sell: {} },
           new BN(Math.floor(parseFloat(price) * 1_000_000)),
           new BN(Math.floor(parseFloat(size)))
         )
@@ -146,7 +149,7 @@ export default function Home() {
         })
         .rpc();
 
-      setStatus("Order routed through private TEE ✓ — MEV bots see nothing");
+      setStatus(`${currentSide.toUpperCase()} order routed through private TEE ✓`);
       setPrice("");
       setSize("");
       await fetchOrders();
