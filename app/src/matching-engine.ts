@@ -213,8 +213,8 @@ async function main(): Promise<void> {
 
         for (const { buy, sell, fillPrice, fillSize } of matches) {
           try {
-            // Settle INSIDE the TEE — invisible to public mempool
-            const sig = await teeProgram.methods
+            // Settle INSIDE TEE — invisible to public mempool
+            const sig = await baseProgram.methods
               .settleMatch(
                 new BN(buy.orderId),
                 new BN(sell.orderId),
